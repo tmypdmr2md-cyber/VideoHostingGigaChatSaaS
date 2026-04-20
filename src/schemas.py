@@ -1,39 +1,87 @@
 from datetime import datetime
+from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from .db import MediaType
-
-
-class PostCreate(BaseModel):
-    # Схема тела запроса при создании записи о медиафайле.
-    owner_id: UUID
-    media_type: MediaType = Field(..., examples=["video"])
-    file_name: str = Field(..., examples=["demo.mp4"])
-    file_url: str = Field(..., examples=["https://cdn.example.com/demo.mp4"])
-    storage_key: str | None = Field(default=None, examples=["media/demo.mp4"])
-    caption: str | None = Field(default=None, examples=["Первое загруженное видео"])
+from .db import SubscriptionStatus, UserRole
 
 
-class PostResponse(BaseModel):
-    # from_attributes=True позволяет строить ответ прямо из ORM-объекта SQLAlchemy.
-    model_config = ConfigDict(from_attributes=True)
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50, examples=["alexander"])
+    email: EmailStr = Field(..., examples=["alex@example.com"])
+    password: str = Field(..., min_length=6, max_length=128, examples=["strong-password"])
 
-    id: UUID
-    owner_id: UUID
-    media_type: MediaType
-    file_name: str
-    file_url: str
-    storage_key: str | None
-    caption: str | None
-    created_at: datetime
 
 class UserResponse(BaseModel):
-    # from_attributes=True позволяет строить ответ прямо из ORM-объекта SQLAlchemy.
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    name: str
-    subcription_status: bool
+    username: str
+    email: EmailStr
+    role: UserRole
+    is_active: bool
     created_at: datetime
+
+
+class UserMeResponse(UserResponse):
+    has_active_subscription: bool
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+
+class FileCreateForm(BaseModel):
+    title: str = Field(..., max_length=255)
+    description: Optional[str] = None
+    is_free: bool = False
+
+
+class FileUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=255)
+    description: Optional[str] = None
+    is_free: Optional[bool] = None
+
+
+class FileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    uploader_id: UUID
+    title: str
+    description: Optional[str]
+    original_name: str
+    extension: str
+    content_type: str
+    size_bytes: int
+    is_free: bool
+    imagekit_url: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class FileDownloadResponse(BaseModel):
+    url: str
+    expires_in: int
+    filename: str
+    content_type: str
+
+
+class SubscriptionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    status: SubscriptionStatus
+    plan_name: Optional[str]
+    started_at: datetime
+    expires_at: Optional[datetime]
+    auto_renew: bool
+
+
+class SubscriptionActivate(BaseModel):
+    plan_name: str = Field(default="monthly", examples=["monthly"])
+    days: int = Field(default=30, ge=1, le=365)
+    auto_renew: bool = False

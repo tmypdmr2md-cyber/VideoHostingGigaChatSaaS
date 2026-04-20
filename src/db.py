@@ -1,37 +1,41 @@
 from collections.abc import AsyncGenerator
 from datetime import datetime as dt
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
 from enum import Enum
 import os
 import uuid
 from typing import Optional
 
-
 from dotenv import load_dotenv
-from sqlalchemy import Boolean, DateTime, Enum as SqlEnum, ForeignKey, String, Text, Uuid
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum as SqlEnum,
+    ForeignKey,
+    String,
+    Text,
+    Uuid,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 load_dotenv()
 
-# Если переменная окружения не задана, подключение не создастся.
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 
 
 class Base(DeclarativeBase):
-    # Общая база для всех ORM-моделей проекта.
     pass
 
 
-class MediaType(str, Enum):
-    # Ограничиваем типы загружаемого контента.
-    PHOTO = "photo"
-    VIDEO = "video"
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    USER = "user"
 
 
 class SubscriptionStatus(str, Enum):
-    # Состояния подписки пользователя.
     INACTIVE = "inactive"
     ACTIVE = "active"
     CANCELED = "canceled"
@@ -41,51 +45,60 @@ class SubscriptionStatus(str, Enum):
 class User(Base):
     __tablename__ = "users"
 
-    # Базовая таблица пользователей после аутентификации.
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        SqlEnum(UserRole), default=UserRole.USER, nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=dt.utcnow)
 
-    media_files: Mapped[list["MediaFile"]] = relationship(
-        back_populates="owner", cascade="all, delete-orphan"
-    )
     subscription: Mapped[Optional["Subscription"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", uselist=False
     )
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == UserRole.ADMIN
+
+    def has_active_subscription(self) -> bool:
+        sub = self.subscription
+        if sub is None or sub.status != SubscriptionStatus.ACTIVE:
+            return False
+        if sub.expires_at is not None and sub.expires_at < dt.utcnow():
+            return False
+        return True
 
 
 class MediaFile(Base):
     __tablename__ = "media_files"
 
-    # Таблица хранит метаданные по фото и видео, а не сами бинарные файлы.
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4
-    )
-    owner_id: Mapped[uuid.UUID] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    uploader_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    media_type: Mapped[MediaType] = mapped_column(SqlEnum(MediaType), nullable=False)
-    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    file_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    storage_key: Mapped[Optional[str]] = mapped_column(String(255))
-    caption: Mapped[Optional[str]] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    original_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    extension: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    imagekit_file_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    imagekit_file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    imagekit_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    is_free: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=dt.utcnow)
-
-    owner: Mapped["User"] = relationship(back_populates="media_files")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=dt.utcnow, onupdate=dt.utcnow
+    )
 
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
-    # У одного пользователя одна актуальная запись о подписке.
-    id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -111,17 +124,15 @@ class Subscription(Base):
     user: Mapped["User"] = relationship(back_populates="subscription")
 
 
-# Асинхронный движок и фабрика сессий для работы FastAPI с БД.
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
 async def init_db() -> None:
-    # Создаем все таблицы, описанные в Base.metadata.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    # Отдаем сессию в Depends(...), а после запроса корректно ее закрываем.
     async with AsyncSessionLocal() as session:
         yield session
