@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-import datetime as dt
+from datetime import datetime as dt
 from datetime import timedelta, datetime
 from enum import Enum
 import os
@@ -15,19 +15,23 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 load_dotenv()
 
+# Если переменная окружения не задана, подключение не создастся.
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 class Base(DeclarativeBase):
+    # Общая база для всех ORM-моделей проекта.
     pass
 
 
 class MediaType(str, Enum):
+    # Ограничиваем типы загружаемого контента.
     PHOTO = "photo"
     VIDEO = "video"
 
 
 class SubscriptionStatus(str, Enum):
+    # Состояния подписки пользователя.
     INACTIVE = "inactive"
     ACTIVE = "active"
     CANCELED = "canceled"
@@ -37,6 +41,7 @@ class SubscriptionStatus(str, Enum):
 class User(Base):
     __tablename__ = "users"
 
+    # Базовая таблица пользователей после аутентификации.
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid.uuid4
     )
@@ -44,7 +49,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=dt.utcnow)
 
     media_files: Mapped[list["MediaFile"]] = relationship(
         back_populates="owner", cascade="all, delete-orphan"
@@ -57,6 +62,7 @@ class User(Base):
 class MediaFile(Base):
     __tablename__ = "media_files"
 
+    # Таблица хранит метаданные по фото и видео, а не сами бинарные файлы.
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid.uuid4
     )
@@ -76,6 +82,7 @@ class MediaFile(Base):
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
+    # У одного пользователя одна актуальная запись о подписке.
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid.uuid4
     )
@@ -104,15 +111,17 @@ class Subscription(Base):
     user: Mapped["User"] = relationship(back_populates="subscription")
 
 
+# Асинхронный движок и фабрика сессий для работы FastAPI с БД.
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
-        yield session
-
-
 async def init_db() -> None:
+    # Создаем все таблицы, описанные в Base.metadata.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    # Отдаем сессию в Depends(...), а после запроса корректно ее закрываем.
+    async with AsyncSessionLocal() as session:
+        yield session

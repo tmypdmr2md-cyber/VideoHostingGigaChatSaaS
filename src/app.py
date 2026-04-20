@@ -1,86 +1,70 @@
-from fastapi import FastAPI, HTTPException
-import os
-import dotenv
-from .schemas import PostCreate as Post, PostResponse as PostResponse
-from gigachat import GigaChat
+from contextlib import asynccontextmanager
 
-dotenv.load_dotenv()
+from fastapi import Depends, FastAPI, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
-IMAGEKIT_PRIVATE_KEY=os.getenv("IMAGEKIT_PRIVATE_KEY")
-IMAGEKIT_PUBLIC_KEY=os.getenv("IMAGEKIT_PUBLIC_KEY")
-IMAGEKIT_URL_ENDPOINT=os.getenv("IMAGEKIT_URL_ENDPOINT")
-IMAGEKIT_ID=os.getenv("IMAGEKIT_ID")
-GIGA_API=os.getenv("GIGA_API")
-MAX_INPUT_LENGTH=os.getenv("MAX_INPUT_LENGTH")
-
-app = FastAPI()
-
-# JSON is JavaScript Object Notation
-# uv run uvicorn src.app:app --reload
-# `http://127.0.0.1:8000/docs`
-
-# src.app (это название папки):app(это названиие переменной app = FastAPI())
-
-text_posts = {
-    1: {"title": "First Post", "content": "This is the first post"},
-    2: {"title": "Second Post", "content": "This is the second post"},
-    3: {"title": "Third Post", "content": "This is the third post"},
-    4: {"title": "Fourth Post", "content": "This is the fourth post"},
-    5: {"title": "Fifth Post", "content": "This is the fifth post"},
-    6: {"title": "Sixth Post", "content": "This is the sixth post"},
-    7: {"title": "Seventh Post", "content": "This is the seventh post"},
-    8: {"title": "Eighth Post", "content": "This is the eighth post"},
-    9: {"title": "Ninth Post", "content": "This is the ninth post"},
-    10: {"title": "Tenth Post", "content": "This is the tenth post"},
-}
-
-@app.get("/posts")
-def get_all_posts(limit: int = None):
-    if limit:
-        # answer = ''
-        # for key in list(text_posts.keys())[:limit]:
-        #     answer += f"{key}: {text_posts[key]['title']} content: {text_posts[key]['content']} "
-        # return answer
-    
-        return {key: text_posts[key] for key in list(text_posts.keys())[:limit]}
-    return text_posts
-
-@app.get("/posts/{post_id}")
-def get_ind_post(post_id: int) -> PostResponse:
-    if post_id in text_posts:
-        return text_posts[post_id]
-    else:
-        return HTTPException(status_code=404, detail="Not found")
+from .db import MediaFile, User, get_db, init_db
+from .schemas import PostCreate, PostResponse
 
 
-@app.post("/posts")
-def create_post(post: Post) -> PostResponse: # PostResponse показывает в каком формате будет возвращаться ответ,
-     #а Post - в каком формате будет приходить запрос
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Создаем таблицы при старте приложения.
+    await init_db()
+    yield
 
-    new_post = {
-        "title": post.title, 
-        "content": post.content
+
+app = FastAPI(lifespan=lifespan)
+
+
+# создание нового эндпоинта post для теста
+@app.post("/posts", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
+async def create_post(
+    post: PostCreate, 
+    session: AsyncSession = Depends(get_db)
+) -> PostResponse:
+    # Проверяем, что пост создается для существующего пользователя.
+    owner = await session.get(User, post.owner_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Создаем ORM-объект для таблицы media_files.
+    media_file = MediaFile(
+        owner_id=post.owner_id,
+        media_type=post.media_type,
+        file_name=post.file_name,
+        file_url=post.file_url,
+        storage_key=post.storage_key,
+        caption=post.caption,
+    )
+
+    # Сохраняем запись в базе и перечитываем ее, чтобы получить сгенерированные поля.
+    session.add(media_file)
+    await session.commit()
+    await session.refresh(media_file)
+
+    return media_file
+
+
+# создание нового эндпоинта user для теста
+@app.post("/users", status_code=status.HTTP_201_CREATED)
+async def create_user(
+    name: str, 
+    subscription_status: bool = False,
+    created_at = dt.datetime.utcnow(),
+    session: AsyncSession = Depends(get_db)
+    ):
+
+    # Вспомогательный эндпоинт для создания пользователей.
+    user = User(name=name, subscription_status=subscription_status, created_at=created_at)
+    session.add(user)
+
+    await session.commit()
+    await session.refresh(user)
+
+    return {
+        "id": user.id, 
+        "name": user.name,
+        "subscription_status": user.subscription_status,
+        "created_at": user.created_at
         }
-    
-    text_posts[max(text_posts.keys()) + 1] = new_post
-    return new_post
-    
-
-
-@app.delete("/posts/{post_id}")
-def delete_post(post_id: int):
-    if post_id in text_posts.keys():
-        del text_posts[post_id]
-        max_key = max(text_posts.keys()) if text_posts else 0
-
-        for i in range(post_id, max_key):
-            text_posts[i] = text_posts[i + 1] 
-            #как бы снова создаем post_id вместо удаленного, 
-            #а остальные посты сдвигаем на единицу влево
-        
-        del text_posts[max_key]
-
-        return {"message": f"Post with id {post_id} deleted"}
-        
-    else:
-        return HTTPException(status_code=404, detail="Not found")
