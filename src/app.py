@@ -4,7 +4,9 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import MediaFile, User, get_db, init_db
-from .schemas import PostCreate, PostResponse
+from .schemas import (PostCreate, 
+                      PostResponse, 
+                      UserResponse)
 import datetime as dt
 
 @asynccontextmanager
@@ -53,7 +55,7 @@ async def create_user(
     subscription_status: bool = False,
     created_at = dt.datetime.utcnow(),
     session: AsyncSession = Depends(get_db)
-    ):
+    ) -> UserResponse:
 
     # Вспомогательный эндпоинт для создания пользователей.
     user = User(name=name, subscription_status=subscription_status, created_at=created_at)
