@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 import os
 import dotenv
-from .schemas import PostCreate as Post
+from .schemas import PostCreate as Post, PostResponse as PostResponse
 from gigachat import GigaChat
 
 dotenv.load_dotenv()
@@ -46,7 +46,7 @@ def get_all_posts(limit: int = None):
     return text_posts
 
 @app.get("/posts/{post_id}")
-def get_ind_post(post_id: int):
+def get_ind_post(post_id: int) -> PostResponse:
     if post_id in text_posts:
         return text_posts[post_id]
     else:
@@ -54,7 +54,8 @@ def get_ind_post(post_id: int):
 
 
 @app.post("/posts")
-def create_post(post: Post):
+def create_post(post: Post) -> PostResponse: # PostResponse показывает в каком формате будет возвращаться ответ,
+     #а Post - в каком формате будет приходить запрос
 
     new_post = {
         "title": post.title, 
@@ -62,9 +63,24 @@ def create_post(post: Post):
         }
     
     text_posts[max(text_posts.keys()) + 1] = new_post
-    
-    # for i in range(100000):
-    #     text_posts[max(text_posts.keys()) + 1] = new_post
-
     return new_post
     
+
+
+@app.delete("/posts/{post_id}")
+def delete_post(post_id: int):
+    if post_id in text_posts.keys():
+        del text_posts[post_id]
+        max_key = max(text_posts.keys()) if text_posts else 0
+
+        for i in range(post_id, max_key):
+            text_posts[i] = text_posts[i + 1] 
+            #как бы снова создаем post_id вместо удаленного, 
+            #а остальные посты сдвигаем на единицу влево
+        
+        del text_posts[max_key]
+
+        return {"message": f"Post with id {post_id} deleted"}
+        
+    else:
+        return HTTPException(status_code=404, detail="Not found")
